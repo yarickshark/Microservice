@@ -4,67 +4,75 @@ const client = require('../database_get')
 class UserController {
     
   async createUserGen(req, res) {
-    try {
-        
-      // Запрос для отримання максимального значення "merchant_id" з бази даних
-      const query = 'SELECT MAX(merchant_id) AS max_merchant_id FROM merchants';
-      const result = await client.query(query);
-  
-      let merchantId = '00'; // Значення по замовчуванню, якщо база даних порожня
-      if (result.rows.length > 0 && result.rows[0].max_merchant_id !== null) {
-        // Якщо є попереднє значення, обчислюємо наступне двозначне значення
-        const previousMerchantId = result.rows[0].max_merchant_id;
-        const nextMerchantId = generateNextId(previousMerchantId);
-        merchantId = nextMerchantId;
-      }
-  
-      // Вставляємо нову строку в базу даних із згенерованими значеннями
-      const insertQuery = 'INSERT INTO merchants (merchant_id, terminal_id) VALUES ($1, $2)';
-      const terminalId = `${merchantId}0`; // Генеруємо трьохзначне значення "terminal_id"
-      await client.query(insertQuery, [merchantId, terminalId]);
-  
-      // Відправляємо успішну відповідь із зсгенерованим значенням "merchant_id"
-      res.status(200).json({ merchantId });
-    } catch (error) {
-      // Якщо виникла помилка, відправляємо помилку клієнту
-      res.status(500).json({ error: 'Internal server error' });
-    } finally {
+    const query = 'SELECT merchant_id FROM merchants ORDER BY merchant_id DESC LIMIT 1;';
+  const result = await client.query(query);
+
+  if (result.rows.length > 0) {
+    const currentMerchantId = result.rows[0].merchant_id;
+    let nextMerchantId;
+
+    if (currentMerchantId === 'ZZ') {
+      res.send('База даних заповнена');
+      return;
     }
-  
-// Функція для генерації наступного двозначного значення
-function generateNextId(previousId) {
-  const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  let nextId = '';
 
-  // Розбиваємо попереднє значення на символи
-  const firstChar = previousId.charAt(0);
-  const secondChar = previousId.charAt(1);
+    if (currentMerchantId.length === 1) {
+      nextMerchantId = incrementAlphanumeric(currentMerchantId);
+    } else if (currentMerchantId.length === 2) {
+      if (currentMerchantId[1] === 'Z') {
+        nextMerchantId = incrementAlphanumeric(currentMerchantId[0]) + '0';
+      } else {
+        nextMerchantId = currentMerchantId[0] + incrementAlphanumeric(currentMerchantId[1]);
+      }
+    }
 
-  // Визначаємо позицію символів в алфавіті
-  const firstIndex = alphabet.indexOf(firstChar);
-  const secondIndex = alphabet.indexOf(secondChar);
+    const isUnique = await checkUniqueness(nextMerchantId);
+    if (isUnique) {
+      const insertQuery = `INSERT INTO merchants (merchant_id, terminal_id) VALUES ($1, $2);`;
+      const terminalId = nextMerchantId + '0';
+      await client.query(insertQuery, [nextMerchantId, terminalId]);
 
-  // Генеруємо наступні позиції
-  let nextFirstIndex = firstIndex;
-  let nextSecondIndex = secondIndex + 1;
+      res.send('Значення merchant_id успішно згенеровано і додано в базу даних.');
+    } else {
+      res.send('Помилка: merchant_id вже існує в базі даних.');
+    }
+  } else {
+    // Якщо таблиця порожня, створюємо перший запис
+    const initialMerchantId = '00';
+    const initialTerminalId = '000';
+    const insertQuery = `INSERT INTO merchants (merchant_id, terminal_id) VALUES ($1, $2);`;
+    await client.query(insertQuery, [initialMerchantId, initialTerminalId]);
 
-  // Якщо дійшли до кінця алфавіта для другого символа, переходимо до наступного символа
-  if (nextSecondIndex === 36) {
-    nextFirstIndex = firstIndex + 1;
-    nextSecondIndex = 0;
+    res.send('Перше значення merchant_id успішно додано в базу даних.');
   }
 
-  // Якщо дійшли до кінця алфавіта для обох символів, переходимо до наступних символів
-  if (nextFirstIndex === 36) {
-    nextFirstIndex = 1;
-    nextSecondIndex = 1;
+// Функція для інкремента значення, що складається з літер та цифер
+function incrementAlphanumeric(value) {
+  const lastChar = value.slice(-1);
+  let nextChar;
+
+  if (lastChar === '9') {
+    nextChar = 'A';
+  } else if (lastChar === 'Z') {
+    return '00'; // База даних заповнена
+  } else {
+    nextChar = String.fromCharCode(lastChar.charCodeAt(0) + 1);
+    if (nextChar === 'A') {
+      nextChar = '0';
+    }
   }
 
-  // Составляемо наступні двозначні значення
-  nextId = alphabet.charAt(nextFirstIndex) + alphabet.charAt(nextSecondIndex);
-
-  return nextId;
+  return value.slice(0, -1) + nextChar;
 }
+
+// Функція для перевірки унікальності merchant_id
+async function checkUniqueness(merchantId) {
+  const query = 'SELECT COUNT(*) AS count FROM merchants WHERE merchant_id = $1;';
+  const result = await client.query(query, [merchantId]);
+  const count = parseInt(result.rows[0].count, 10);
+
+  return count === 0;
+ }
 }
 
 
